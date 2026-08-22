@@ -50,3 +50,19 @@ func IsLow(err error) bool      { return errors.Is(err, ErrHeadLow) }
 func IsHigh(err error) bool     { return errors.Is(err, ErrHeadHigh) }
 func IsUnstable(err error) bool { return errors.Is(err, ErrUnstable) }
 func IsStale(err error) bool    { return errors.Is(err, ErrStaleLevel) }
+
+func Classify(err error) string {
+	if err == nil {
+		return "ok"
+	}
+	if IsLow(err) {
+		return "head_low"
+	}
+	if IsHigh(err) {
+		return "head_high"
+	}
+	if IsStale(err) {
+		return "stale_level"
+	}
+	return "head_bad"
+}

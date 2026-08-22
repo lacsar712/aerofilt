@@ -98,6 +98,19 @@ func (c *Coordinator) Run(ctx context.Context, req model.BackwashRequest) (model
 }
 
 // ApplyOpenSequence opens valves for each wash phase step, honouring cancellation between steps.
+// GateBackwash runs admission prechecks under a coordinator operation lock.
+func (c *Coordinator) GateBackwash(ctx context.Context, cell model.CellID, allowed func() bool) error {
+	c.opMu.Lock()
+	defer c.opMu.Unlock()
+	if !allowed() {
+		return fmt.Errorf("backwash gate denied for %s", cell)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (c *Coordinator) ApplyOpenSequence(ctx context.Context, cell model.CellID, phases []model.WashPhase) error {
 	for i, phase := range phases {
 		if i > 0 {

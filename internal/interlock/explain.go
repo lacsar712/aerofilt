@@ -22,3 +22,10 @@ func ClassifyHead(err error) string {
 	}
 	return "head_bad"
 }
+
+func StaleLevelCheck(err error) error {
+	if errors.Is(err, level.ErrStaleLevel) {
+		return err
+	}
+	return nil
+}
