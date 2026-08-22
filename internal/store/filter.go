@@ -8,11 +8,12 @@ import (
 )
 
 type FilterStore struct {
-	mu      sync.RWMutex
-	plantID model.PlantID
-	mode    model.PlantMode
-	cells   map[model.CellID]model.FilterCell
-	media   map[model.FilterID]model.MediaProfile
+	mu         sync.RWMutex
+	plantID    model.PlantID
+	mode       model.PlantMode
+	cells      map[model.CellID]model.FilterCell
+	media      map[model.FilterID]model.MediaProfile
+	mediaCache []model.MediaProfile
 }
 
 func NewFilterStore(plant model.PlantID, specs []model.FilterCell, profiles []model.MediaProfile) *FilterStore {
@@ -69,7 +70,8 @@ func (s *FilterStore) Snapshot(at time.Time) model.FilterSnapshot {
 	for _, m := range s.media {
 		media = append(media, m)
 	}
-	return model.FilterSnapshot{PlantID: s.plantID, Mode: s.mode, Cells: cells, Media: media, TakenAt: at, HeadAvgM: model.AvgHead(cells)}
+	s.mediaCache = append([]model.MediaProfile(nil), media...)
+	return model.FilterSnapshot{PlantID: s.plantID, Mode: s.mode, Cells: cells, Media: append([]model.MediaProfile(nil), s.mediaCache...), TakenAt: at, HeadAvgM: model.AvgHead(cells)}
 }
 
 func (s *FilterStore) ReplaceAll(cells []model.FilterCell, media []model.MediaProfile, mode model.PlantMode) {

@@ -45,6 +45,9 @@ func (p *Policy) AdmitBackwash(snap model.FilterSnapshot, cell model.CellID, sam
 		if level.IsHigh(err) {
 			return model.InterlockDecision{Allowed: false, Code: "HEAD_HIGH", Reasons: []string{err.Error()}}, err
 		}
+		if level.IsStale(err) {
+			return model.InterlockDecision{Allowed: false, Code: "HEAD_STALE", Reasons: []string{err.Error()}}, err
+		}
 		return model.InterlockDecision{Allowed: false, Code: "HEAD_BAD", Reasons: []string{err.Error()}}, err
 	}
 	if err := p.CheckMedia(profile); err != nil {

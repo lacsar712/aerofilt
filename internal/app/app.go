@@ -169,6 +169,13 @@ func (a *App) RequestBackwash(req model.BackwashRequest) (model.BackwashResult, 
 		return model.BackwashResult{}, err
 	}
 	defer a.cells.Unlock(req.CellID)
+	ctx := a.activeCtx()
+	if _, err := a.blower.Run(ctx, model.BlowerCommand{
+		OperationID: model.OperationID(string(req.OperationID) + "-prime"),
+		TargetPct:   42,
+	}); err != nil {
+		return model.BackwashResult{OperationID: req.OperationID, Cancelled: ctx.Err() != nil, Message: err.Error()}, err
+	}
 	snap := a.store.Snapshot(time.Now().UTC())
 	decision := a.cells.Evaluate(snap, req.CellID)
 	if !decision.Allowed {
@@ -190,7 +197,7 @@ func (a *App) RequestBackwash(req model.BackwashRequest) (model.BackwashResult, 
 	if err := a.guard.Evaluate(req.CellID, profile, sample); err != nil {
 		return model.BackwashResult{}, err
 	}
-	res, err := a.coord.Run(a.activeCtx(), req)
+	res, err := a.coord.Run(ctx, req)
 	if err != nil {
 		return res, err
 	}
@@ -246,9 +253,6 @@ func (a *App) EmergencyStop() error {
 	a.blower.Idle()
 	a.alarms.RaiseEStop(a.cfg.PlantID)
 	a.cancel()
-	a.mu.Lock()
-	a.rootCtx, a.cancel = context.WithCancel(context.Background())
-	a.mu.Unlock()
 	return nil
 }
 func (a *App) ClearEmergencyStop() error {
@@ -256,6 +260,9 @@ func (a *App) ClearEmergencyStop() error {
 	a.book.SetMode(model.PlantModeStandby)
 	a.blower.Idle()
 	_ = a.alarms.Clear("ESTOP")
+	a.mu.Lock()
+	a.rootCtx, a.cancel = context.WithCancel(context.Background())
+	a.mu.Unlock()
 	return nil
 }
 func (a *App) activeCtx() context.Context { a.mu.Lock(); defer a.mu.Unlock(); return a.rootCtx }
@@ -267,11 +274,15 @@ func (a *App) syncStore() {
 func (a *App) ProcessClock() *clock.ProcessClock { return a.procClock }
 func (a *App) WashWindow() *backwash.Window { return a.washWin }
 func (a *App) Coordinator() *backwash.Coordinator { return a.coord }
+func (a *App) ApplyOpenSequence(ctx context.Context, cell model.CellID, phases []model.WashPhase) error {
+	return a.coord.ApplyOpenSequence(ctx, cell, phases)
+}
 func (a *App) Cells() *interlock.Cells { return a.cells }
 func (a *App) Store() *store.FilterStore { return a.store }
 func (a *App) Machine(cell model.CellID) *fsm.WashMachine { return a.machines[cell] }
 func (a *App) AdvanceProcess(d time.Duration) { a.procClock.Advance(d) }
 func (a *App) Blower() *blower.Controller { return a.blower }
+func (a *App) EmitterValveCount() int64   { return a.emitter.ValveCount() }
 
 func (a *App) TouchMediaAfterWash(filter model.FilterID, at time.Time) error {
 	snap := a.store.Snapshot(at)

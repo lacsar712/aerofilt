@@ -3,15 +3,17 @@ package level
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/lacsar712/aerofilt/internal/model"
 )
 
 var (
-	ErrHeadLow    = errors.New("head level below minimum")
-	ErrHeadHigh   = errors.New("head level above maximum")
-	ErrUnstable   = errors.New("head reading unstable")
-	ErrBadQuality = errors.New("head sample quality too low")
+	ErrHeadLow      = errors.New("head level below minimum")
+	ErrHeadHigh     = errors.New("head level above maximum")
+	ErrUnstable     = errors.New("head reading unstable")
+	ErrBadQuality   = errors.New("head sample quality too low")
+	ErrStaleLevel   = errors.New("head sample stale")
 )
 
 type Monitor struct {
@@ -32,6 +34,9 @@ func (m *Monitor) Validate(sample model.HeadSample, minM, maxM float64) error {
 	if sample.Quality < m.minQuality {
 		return fmt.Errorf("%w: quality %.2f", ErrBadQuality, sample.Quality)
 	}
+	if !sample.At.IsZero() && time.Since(sample.At) > 5*time.Minute {
+		return fmt.Errorf("%w: age %s", ErrStaleLevel, time.Since(sample.At).Round(time.Second))
+	}
 	if sample.Meters < minM {
 		return fmt.Errorf("%w: %.3f < %.3f", ErrHeadLow, sample.Meters, minM)
 	}
@@ -41,6 +46,7 @@ func (m *Monitor) Validate(sample model.HeadSample, minM, maxM float64) error {
 	return nil
 }
 
-func IsLow(err error) bool     { return errors.Is(err, ErrHeadLow) }
-func IsHigh(err error) bool    { return errors.Is(err, ErrHeadHigh) }
+func IsLow(err error) bool      { return errors.Is(err, ErrHeadLow) }
+func IsHigh(err error) bool     { return errors.Is(err, ErrHeadHigh) }
 func IsUnstable(err error) bool { return errors.Is(err, ErrUnstable) }
+func IsStale(err error) bool    { return errors.Is(err, ErrStaleLevel) }

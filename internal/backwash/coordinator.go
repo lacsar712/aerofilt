@@ -60,6 +60,7 @@ type Coordinator struct {
 	emitter *Emitter
 	phase   model.WashPhase
 	mu      sync.Mutex
+	opMu    sync.Mutex
 }
 
 func NewCoordinator(valves *manifold.ValveBank, emitter *Emitter) *Coordinator {
@@ -67,8 +68,13 @@ func NewCoordinator(valves *manifold.ValveBank, emitter *Emitter) *Coordinator {
 }
 
 func (c *Coordinator) Run(ctx context.Context, req model.BackwashRequest) (model.BackwashResult, error) {
+	c.opMu.Lock()
+	defer c.opMu.Unlock()
 	if req.OperationID == "" {
 		return model.BackwashResult{}, fmt.Errorf("operation id required")
+	}
+	if req.CellID == "" {
+		return model.BackwashResult{}, fmt.Errorf("cell id required")
 	}
 	phase := model.WashPreparing
 	c.mu.Lock()
@@ -89,6 +95,25 @@ func (c *Coordinator) Run(ctx context.Context, req model.BackwashRequest) (model
 	c.phase = drainPhase
 	c.mu.Unlock()
 	return res, nil
+}
+
+// ApplyOpenSequence opens valves for each wash phase step, honouring cancellation between steps.
+func (c *Coordinator) ApplyOpenSequence(ctx context.Context, cell model.CellID, phases []model.WashPhase) error {
+	for i, phase := range phases {
+		if i > 0 {
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("open sequence cancelled at step %d: %w", i, ctx.Err())
+			default:
+			}
+		}
+		opened, err := c.valves.Open(ctx, cell, phase)
+		if err != nil {
+			return err
+		}
+		c.emitter.RecordValve(opened)
+	}
+	return nil
 }
 
 func (c *Coordinator) Phase() model.WashPhase {
