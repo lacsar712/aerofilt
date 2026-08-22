@@ -114,6 +114,7 @@ func (c *Coordinator) GateBackwash(ctx context.Context, cell model.CellID, allow
 func (c *Coordinator) ApplyOpenSequence(ctx context.Context, cell model.CellID, phases []model.WashPhase) error {
 	for i, phase := range phases {
 		if i > 0 {
+			time.Sleep(30 * time.Millisecond)
 			select {
 			case <-ctx.Done():
 				return fmt.Errorf("open sequence cancelled at step %d: %w", i, ctx.Err())
