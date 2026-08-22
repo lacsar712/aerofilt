@@ -1,25 +1,22 @@
-package heater
+package aeration_test
 
 import (
 	"context"
 	"testing"
 
+	"github.com/lacsar712/aerofilt/internal/aeration"
 	"github.com/lacsar712/aerofilt/internal/model"
 )
 
-func TestHeaterRampRespectsCancel(t *testing.T) {
-	em := NewCountingEmitter(120)
-	b := NewBank(120, em)
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	err := b.RampPower(ctx, model.ZoneID("center"), 90, 10)
-	if err == nil {
-		t.Fatal("expected heater ramp to stop on cancelled context")
+func TestBankRamp(t *testing.T) {
+	bank := aeration.NewBank([]model.FilterCell{{ID: "cell-a", Online: true, AerationPct: 50}})
+	zid := model.ZoneID("zone-cell-a")
+	_ = bank.SetTarget(zid, 80)
+	if err := bank.Ramp(context.Background(), zid, 4); err != nil {
+		t.Fatal(err)
 	}
-	if em.HeaterCount() != 0 {
-		t.Fatalf("cancelled ramp still emitted heater steps: %d", em.HeaterCount())
-	}
-	if b.TotalKW() != 0 {
-		t.Fatalf("cancelled ramp still raised bank power to %.1f", b.TotalKW())
+	z, ok := bank.Zone(zid)
+	if !ok || z.ActualPct < 70 {
+		t.Fatalf("zone=%+v", z)
 	}
 }

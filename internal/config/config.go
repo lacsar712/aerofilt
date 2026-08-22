@@ -1,4 +1,3 @@
-// Package config loads Biofilter filter backwash runtime settings.
 package config
 
 import (
@@ -6,194 +5,95 @@ import (
 	"fmt"
 	"os"
 	"time"
+
+	"github.com/lacsar712/aerofilt/internal/model"
 )
 
-// Config holds Biofilter filter control parameters.
 type Config struct {
-	FilterID           string        `json:"filterId"`
-	ListenAddr          string        `json:"listenAddr"`
-	StaticDir           string        `json:"staticDir"`
-	DefaultSetpointC    float64       `json:"defaultSetpointC"`
-	BackwashBandC           float64       `json:"backwashBandC"`
-	MinBackwashDuration     time.Duration `json:"minBackwashDuration"`
-	SensorStaleAfter    time.Duration `json:"sensorStaleAfter"`
-	ChamberLeaseTTL     time.Duration `json:"chamberLeaseTtl"`
-	HeaterMaxKW         float64       `json:"heaterMaxKW"`
-	VacuumTargetPa      float64       `json:"vacuumTargetPa"`
-	VacuumLeakLimit     float64       `json:"vacuumLeakLimitPaPerS"`
-	GasSetpointMPa      float64       `json:"gasSetpointMpa"`
-	GasMaxMPa           float64       `json:"gasMaxMpa"`
-	ZoneIDs             []string      `json:"zoneIds"`
-	SensorPerZone       int           `json:"sensorPerZone"`
-	TelemetryBuffer     int           `json:"telemetryBuffer"`
-	AlarmCapacity       int           `json:"alarmCapacity"`
-	InterlockStrict     bool          `json:"interlockStrict"`
-	JournalPath         string        `json:"journalPath"`
-	RampRateCPerMin     float64       `json:"rampRateCPerMin"`
-	BlowerRateCPerMin   float64       `json:"blowerRateCPerMin"`
-	UniformityLimitC    float64       `json:"uniformityLimitC"`
-	OverTempLimitC      float64       `json:"overTempLimitC"`
+	PlantID         model.PlantID `json:"plant_id"`
+	ListenAddr      string        `json:"listen_addr"`
+	WashCloseWindow time.Duration `json:"wash_close_window"`
+	MinHeadM        float64       `json:"min_head_m"`
+	MaxHeadM        float64       `json:"max_head_m"`
+	BackwashBandM   float64       `json:"backwash_band_m"`
+	TargetHeadM     float64       `json:"target_head_m"`
+	DefaultAirCMS   float64       `json:"default_air_cms"`
+	DefaultWaterCMS float64       `json:"default_water_cms"`
+	MaxClogIndex    float64       `json:"max_clog_index"`
+	BlowerMaxPct    float64       `json:"blower_max_pct"`
+	LeaseTTL        time.Duration `json:"lease_ttl"`
+	AlarmCapacity   int           `json:"alarm_capacity"`
+	TelemetryBuffer int           `json:"telemetry_buffer"`
+	JournalCapacity int           `json:"journal_capacity"`
+	Cells           []CellSpec    `json:"cells"`
 }
 
-// Default returns production-safe Biofilter defaults for a single filter.
+type CellSpec struct {
+	ID       model.CellID    `json:"id"`
+	FilterID model.FilterID  `json:"filter_id"`
+	Valves   []model.ValveID `json:"valves"`
+}
+
 func Default() Config {
 	return Config{
-		FilterID:         "biofilter-01",
-		ListenAddr:        ":8090",
-		StaticDir:         "web",
-		DefaultSetpointC:  1180,
-		BackwashBandC:         5,
-		MinBackwashDuration:   2 * time.Hour,
-		SensorStaleAfter:  5 * time.Second,
-		ChamberLeaseTTL:   45 * time.Second,
-		HeaterMaxKW:       120,
-		VacuumTargetPa:    0.1,
-		VacuumLeakLimit:   0.05,
-		GasSetpointMPa:    100,
-		GasMaxMPa:         120,
-		ZoneIDs:           []string{"crown", "left", "right", "floor", "center"},
-		SensorPerZone:     4,
-		TelemetryBuffer:   4096,
-		AlarmCapacity:     256,
-		InterlockStrict:   true,
-		JournalPath:       "aerofilt.journal",
-		RampRateCPerMin:   8,
-		BlowerRateCPerMin: 15,
-		UniformityLimitC:  8,
-		OverTempLimitC:    1250,
+		PlantID: "plant-north", ListenAddr: ":8080", WashCloseWindow: 45 * time.Second,
+		MinHeadM: 0.8, MaxHeadM: 3.2, BackwashBandM: 0.15, TargetHeadM: 1.6,
+		DefaultAirCMS: 12.0, DefaultWaterCMS: 8.0, MaxClogIndex: 0.85, BlowerMaxPct: 100,
+		LeaseTTL: 2 * time.Minute, AlarmCapacity: 64, TelemetryBuffer: 512, JournalCapacity: 256,
+		Cells: []CellSpec{
+			{ID: "cell-a", FilterID: "filter-1", Valves: []model.ValveID{"v-drain-a", "v-air-a", "v-rinse-a"}},
+			{ID: "cell-b", FilterID: "filter-1", Valves: []model.ValveID{"v-drain-b", "v-air-b", "v-rinse-b"}},
+			{ID: "cell-c", FilterID: "filter-2", Valves: []model.ValveID{"v-drain-c", "v-air-c", "v-rinse-c"}},
+		},
 	}
 }
 
-// Validate checks configuration bounds before filter start.
 func (c Config) Validate() error {
-	if c.FilterID == "" {
-		return fmt.Errorf("filterId required")
+	if c.PlantID == "" {
+		return fmt.Errorf("plant_id required")
 	}
-	if c.ListenAddr == "" {
-		return fmt.Errorf("listenAddr required")
+	if c.WashCloseWindow <= 0 {
+		return fmt.Errorf("wash_close_window must be positive")
 	}
-	if c.DefaultSetpointC <= 0 || c.DefaultSetpointC > 2000 {
-		return fmt.Errorf("defaultSetpointC out of range")
+	if c.MinHeadM >= c.MaxHeadM {
+		return fmt.Errorf("min_head_m must be less than max_head_m")
 	}
-	if c.BackwashBandC < 0 {
-		return fmt.Errorf("backwashBandC must be >= 0")
-	}
-	if c.MinBackwashDuration <= 0 {
-		return fmt.Errorf("minBackwashDuration must be positive")
-	}
-	if c.SensorStaleAfter <= 0 {
-		return fmt.Errorf("sensorStaleAfter must be positive")
-	}
-	if c.ChamberLeaseTTL <= 0 {
-		return fmt.Errorf("chamberLeaseTtl must be positive")
-	}
-	if c.HeaterMaxKW <= 0 {
-		return fmt.Errorf("heaterMaxKW must be positive")
-	}
-	if c.VacuumTargetPa < 0 {
-		return fmt.Errorf("vacuumTargetPa must be >= 0")
-	}
-	if c.GasSetpointMPa <= 0 || c.GasSetpointMPa > c.GasMaxMPa {
-		return fmt.Errorf("gas pressure band invalid")
-	}
-	if len(c.ZoneIDs) == 0 {
-		return fmt.Errorf("at least one zone required")
-	}
-	if c.SensorPerZone < 1 {
-		return fmt.Errorf("sensorPerZone must be >= 1")
-	}
-	if c.TelemetryBuffer < 64 {
-		return fmt.Errorf("telemetryBuffer too small")
-	}
-	if c.AlarmCapacity < 16 {
-		return fmt.Errorf("alarmCapacity too small")
-	}
-	if c.RampRateCPerMin <= 0 {
-		return fmt.Errorf("rampRateCPerMin must be positive")
-	}
-	if c.OverTempLimitC <= c.DefaultSetpointC {
-		return fmt.Errorf("overTempLimitC must exceed default setpoint")
+	if len(c.Cells) == 0 {
+		return fmt.Errorf("at least one cell required")
 	}
 	return nil
 }
 
-// LoadJSON reads config from a JSON file; missing file yields Default.
 func LoadJSON(path string) (Config, error) {
 	cfg := Default()
 	if path == "" {
-		return cfg, nil
+		return cfg, cfg.Validate()
 	}
-	b, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return cfg, nil
-		}
-		return Config{}, err
-	}
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(b, &raw); err != nil {
-		return Config{}, fmt.Errorf("decode config: %w", err)
-	}
-	stale := durationOr(raw, "sensorStaleAfter", cfg.SensorStaleAfter)
-	lease := durationOr(raw, "chamberLeaseTtl", cfg.ChamberLeaseTTL)
-	backwash := durationOr(raw, "minBackwashDuration", cfg.MinBackwashDuration)
-	delete(raw, "sensorStaleAfter")
-	delete(raw, "chamberLeaseTtl")
-	delete(raw, "minBackwashDuration")
-	trimmed, err := json.Marshal(raw)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return Config{}, err
 	}
-	if err := json.Unmarshal(trimmed, &cfg); err != nil {
-		return Config{}, fmt.Errorf("decode config: %w", err)
-	}
-	cfg.SensorStaleAfter = stale
-	cfg.ChamberLeaseTTL = lease
-	cfg.MinBackwashDuration = backwash
-	if err := cfg.Validate(); err != nil {
+	if err := json.Unmarshal(data, &cfg); err != nil {
 		return Config{}, err
 	}
-	return cfg, nil
+	return cfg, cfg.Validate()
 }
 
-func durationOr(raw map[string]json.RawMessage, key string, fallback time.Duration) time.Duration {
-	v, ok := raw[key]
-	if !ok {
-		return fallback
+func (c Config) CellIDs() []model.CellID {
+	out := make([]model.CellID, len(c.Cells))
+	for i, spec := range c.Cells {
+		out[i] = spec.ID
 	}
-	var asStr string
-	if err := json.Unmarshal(v, &asStr); err == nil {
-		d, err := time.ParseDuration(asStr)
-		if err == nil {
-			return d
-		}
-	}
-	var asNs int64
-	if err := json.Unmarshal(v, &asNs); err == nil && asNs > 0 {
-		return time.Duration(asNs)
-	}
-	return fallback
-}
-
-// ZoneList returns configured zone identifiers.
-func (c Config) ZoneList() []string {
-	out := make([]string, len(c.ZoneIDs))
-	copy(out, c.ZoneIDs)
 	return out
 }
 
-// ClampHeaterKW clamps requested heater power to plant max.
-func (c Config) ClampHeaterKW(v float64) float64 {
-	if v < 0 {
-		return 0
+func (c Config) ValvesFor(cell model.CellID) []model.ValveID {
+	for _, spec := range c.Cells {
+		if spec.ID == cell {
+			cp := make([]model.ValveID, len(spec.Valves))
+			copy(cp, spec.Valves)
+			return cp
+		}
 	}
-	if v > c.HeaterMaxKW {
-		return c.HeaterMaxKW
-	}
-	return v
-}
-
-// BackwashWindowSpec builds a backwash window from config defaults.
-func (c Config) BackwashWindowSpec() (target, band float64, minDur time.Duration) {
-	return c.DefaultSetpointC, c.BackwashBandC, c.MinBackwashDuration
+	return nil
 }

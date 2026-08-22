@@ -1,184 +1,126 @@
-// Package api serves HTTP endpoints for the Biofilter filter control desk.
 package api
 
 import (
 	"encoding/json"
-	"io"
 	"net/http"
 	"time"
 
 	"github.com/lacsar712/aerofilt/internal/model"
 )
 
-// FilterController is the application surface the HTTP layer depends on.
-type FilterController interface {
-	Status() model.FilterStatus
-	IngestTemperature(sample model.TempSample) error
-	StartCycle(batchID model.BatchID, operator string) error
-	BackwashTransition(req model.BackwashTransitionRequest) (model.BackwashTransitionResult, error)
-	EmergencyStop() error
-	ClearEmergencyStop() error
-	ProfileSnapshot() model.ProfileSnapshot
+type PlantService interface {
+	Status() model.PlantStatus
 	Alarms() []model.AlarmEvent
 	Telemetry(n int) []model.TelemetryPoint
+	RequestBackwash(r model.BackwashRequest) (model.BackwashResult, error)
+	TransitionWash(r model.WashTransitionRequest) (model.WashTransitionResult, error)
+	EmergencyStop() error
+	ClearEmergencyStop() error
 }
 
-// Server wraps HTTP routes for the filter controller.
-type Server struct {
-	ctrl   FilterController
-	mux    *http.ServeMux
-	static http.Handler
-}
+type Server struct{ app PlantService }
 
-// NewServer constructs API routes; static may be nil.
-func NewServer(ctrl FilterController, static http.Handler) *Server {
-	s := &Server{ctrl: ctrl, mux: http.NewServeMux(), static: static}
-	s.routes()
-	return s
-}
+func NewServer(app PlantService) *Server { return &Server{app: app} }
 
-// Handler returns the root handler.
-func (s *Server) Handler() http.Handler { return s.mux }
-
-func (s *Server) routes() {
-	s.mux.HandleFunc("/v1/status", s.handleStatus)
-	s.mux.HandleFunc("/v1/temperature", s.handleTemperature)
-	s.mux.HandleFunc("/v1/cycle", s.handleCycle)
-	s.mux.HandleFunc("/v1/backwash", s.handleBackwash)
-	s.mux.HandleFunc("/v1/estop", s.handleEStop)
-	s.mux.HandleFunc("/v1/estop/clear", s.handleEStopClear)
-	s.mux.HandleFunc("/v1/profile", s.handleProfile)
-	s.mux.HandleFunc("/v1/alarms", s.handleAlarms)
-	s.mux.HandleFunc("/v1/telemetry", s.handleTelemetry)
-	s.mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = io.WriteString(w, "ok")
-	})
-	if s.static != nil {
-		s.mux.Handle("/", s.static)
-	}
+func (s *Server) Handler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, http.StatusOK, map[string]string{"status": "ok"}) })
+	mux.HandleFunc("/api/status", s.handleStatus)
+	mux.HandleFunc("/api/alarms", s.handleAlarms)
+	mux.HandleFunc("/api/telemetry", s.handleTelemetry)
+	mux.HandleFunc("/api/backwash", s.handleBackwash)
+	mux.HandleFunc("/api/wash/transition", s.handleWashTransition)
+	mux.HandleFunc("/api/estop", s.handleEStop)
+	mux.HandleFunc("/api/estop/clear", s.handleClearEStop)
+	return mux
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	writeJSON(w, http.StatusOK, s.ctrl.Status())
+	writeJSON(w, http.StatusOK, s.app.Status())
 }
-
-func (s *Server) handleTemperature(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
+func (s *Server) handleAlarms(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var sample model.TempSample
-	if err := json.NewDecoder(r.Body).Decode(&sample); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid json")
-		return
-	}
-	if sample.At.IsZero() {
-		sample.At = time.Now().UTC()
-	}
-	if err := s.ctrl.IngestTemperature(sample); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusAccepted, map[string]string{"status": "accepted"})
+	writeJSON(w, http.StatusOK, s.app.Alarms())
 }
-
-func (s *Server) handleCycle(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleTelemetry(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.app.Telemetry(64))
+}
+func (s *Server) handleBackwash(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var body struct {
-		BatchID  model.BatchID `json:"batchId"`
-		Operator string        `json:"operator"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid json")
+	var req model.BackwashRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := s.ctrl.StartCycle(body.BatchID, body.Operator); err != nil {
+	if req.IssuedAt.IsZero() {
+		req.IssuedAt = time.Now().UTC()
+	}
+	res, err := s.app.RequestBackwash(req)
+	if err != nil {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "started"})
+	writeJSON(w, http.StatusAccepted, res)
 }
-
-func (s *Server) handleBackwash(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleWashTransition(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var req model.BackwashTransitionRequest
+	var req model.WashTransitionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid json")
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	res, err := s.ctrl.BackwashTransition(req)
+	if req.At.IsZero() {
+		req.At = time.Now().UTC()
+	}
+	res, err := s.app.TransitionWash(req)
 	if err != nil {
-		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "result": res})
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error(), "phase": string(res.Phase)})
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
 }
-
 func (s *Server) handleEStop(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if err := s.ctrl.EmergencyStop(); err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+	if err := s.app.EmergencyStop(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "estop"})
 }
-
-func (s *Server) handleEStopClear(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleClearEStop(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if err := s.ctrl.ClearEmergencyStop(); err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+	if err := s.app.ClearEmergencyStop(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "cleared"})
-}
-
-func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-	writeJSON(w, http.StatusOK, s.ctrl.ProfileSnapshot())
-}
-
-func (s *Server) handleAlarms(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-	writeJSON(w, http.StatusOK, s.ctrl.Alarms())
-}
-
-func (s *Server) handleTelemetry(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-	writeJSON(w, http.StatusOK, s.ctrl.Telemetry(100))
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(v)
-}
-
-func writeErr(w http.ResponseWriter, code int, msg string) {
-	writeJSON(w, code, map[string]string{"error": msg})
 }

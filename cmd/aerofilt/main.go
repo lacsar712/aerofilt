@@ -1,25 +1,24 @@
-// Command aerofilt runs the Biofilter filter backwash window & temperature control service.
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
-	"path/filepath"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/lacsar712/aerofilt/internal/app"
 	"github.com/lacsar712/aerofilt/internal/config"
-	"github.com/lacsar712/aerofilt/internal/web"
 )
 
 func main() {
 	cfgPath := flag.String("config", "", "optional JSON config path")
 	addr := flag.String("addr", "", "listen address override")
 	flag.Parse()
-
 	cfg, err := config.LoadJSON(*cfgPath)
 	if err != nil {
 		log.Fatalf("config: %v", err)
@@ -27,31 +26,25 @@ func main() {
 	if *addr != "" {
 		cfg.ListenAddr = *addr
 	}
-
 	application, err := app.New(cfg)
 	if err != nil {
 		log.Fatalf("app: %v", err)
 	}
 	defer func() { _ = application.Close() }()
-
-	if err := application.SeedSensors(time.Now().UTC()); err != nil {
+	if err := application.SeedHead(time.Now().UTC()); err != nil {
 		log.Fatalf("seed: %v", err)
 	}
-
-	static := web.Handler()
-	if cfg.StaticDir != "" {
-		if st, err := os.Stat(cfg.StaticDir); err == nil && st.IsDir() {
-			static = http.FileServer(http.Dir(cfg.StaticDir))
-		} else if abs, err := filepath.Abs(cfg.StaticDir); err == nil {
-			if st, err := os.Stat(abs); err == nil && st.IsDir() {
-				static = http.FileServer(http.Dir(abs))
-			}
+	srv := &http.Server{Addr: cfg.ListenAddr, Handler: application.AttachHTTP(), ReadHeaderTimeout: 5 * time.Second}
+	go func() {
+		fmt.Printf("aerofilt listening on %s plant=%s\n", cfg.ListenAddr, cfg.PlantID)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatal(err)
 		}
-	}
-
-	handler := application.AttachHTTP(static)
-	fmt.Printf("aerofilt listening on %s filter=%s\n", cfg.ListenAddr, cfg.FilterID)
-	if err := http.ListenAndServe(cfg.ListenAddr, handler); err != nil {
-		log.Fatal(err)
-	}
+	}()
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+	<-stop
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_ = srv.Shutdown(ctx)
 }

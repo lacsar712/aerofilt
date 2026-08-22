@@ -1,16 +1,18 @@
-package config
+package config_test
 
-import "testing"
+import (
+	"testing"
+	"time"
 
-func TestDefaultValidates(t *testing.T) {
-	if err := Default().Validate(); err != nil {
+	"github.com/lacsar712/aerofilt/internal/config"
+)
+
+func TestDefaultValid(t *testing.T) {
+	cfg := config.Default()
+	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
-}
-
-func TestClampHeaterKW(t *testing.T) {
-	cfg := Default()
-	if cfg.ClampHeaterKW(999) != cfg.HeaterMaxKW {
-		t.Fatal("clamp failed")
+	if cfg.WashCloseWindow != 45*time.Second {
+		t.Fatalf("window=%s", cfg.WashCloseWindow)
 	}
 }

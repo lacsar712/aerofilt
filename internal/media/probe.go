@@ -1,86 +1,51 @@
-// Package media validates mediacouple readings and media fault classification.
 package media
 
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/lacsar712/aerofilt/internal/model"
 )
 
-// RecoverableMediaFault marks a transient mediacouple drift that may continue
-// after sensor trim without aborting the Biofilter cycle.
-var RecoverableMediaFault = errors.New("recoverable mediacouple fault")
+var (
+	ErrClogged   = errors.New("filter media clogged beyond threshold")
+	ErrVoidRatio = errors.New("media void ratio out of range")
+	ErrBedDepth  = errors.New("media bed depth invalid")
+)
 
-// ErrMediaOpen is a hard open-circuit mediacouple fault.
-var ErrMediaOpen = errors.New("mediacouple open circuit")
-
-// ErrMediaShort is a hard shorted mediacouple fault.
-var ErrMediaShort = errors.New("mediacouple short circuit")
-
-// Probe wraps zone mediacouple validation with sentinel error chains.
 type Probe struct {
-	minQuality float64
-	maxDriftC  float64
+	maxClog, minVoid, maxVoid, minBedDepth float64
 }
 
-// NewProbe creates a mediacouple validator.
-func NewProbe(minQuality, maxDriftC float64) *Probe {
-	if minQuality <= 0 {
-		minQuality = 0.5
-	}
-	if maxDriftC <= 0 {
-		maxDriftC = 25
-	}
-	return &Probe{minQuality: minQuality, maxDriftC: maxDriftC}
+func NewProbe(maxClog, minVoid, maxVoid, minBedDepth float64) *Probe {
+	if maxClog <= 0 { maxClog = 0.85 }
+	if minVoid <= 0 { minVoid = 0.35 }
+	if maxVoid <= minVoid { maxVoid = 0.55 }
+	if minBedDepth <= 0 { minBedDepth = 1.0 }
+	return &Probe{maxClog: maxClog, minVoid: minVoid, maxVoid: maxVoid, minBedDepth: minBedDepth}
 }
 
-// ValidateSample checks one reading against expected band.
-func (p *Probe) ValidateSample(sample model.TempSample, expectedC float64) error {
-	if err := model.ValidateTempSample(sample); err != nil {
-		return err
+func (p *Probe) Evaluate(profile model.MediaProfile) error {
+	if profile.BedDepthM < p.minBedDepth {
+		return fmt.Errorf("%w: %.2f m", ErrBedDepth, profile.BedDepthM)
 	}
-	if sample.Quality < p.minQuality {
-		return fmt.Errorf("sensor %s quality %.2f: %w", sample.SensorID, sample.Quality, RecoverableMediaFault)
+	if profile.VoidRatio < p.minVoid || profile.VoidRatio > p.maxVoid {
+		return fmt.Errorf("%w: %.3f", ErrVoidRatio, profile.VoidRatio)
 	}
-	drift := sample.Celsius - expectedC
-	if drift < 0 {
-		drift = -drift
-	}
-	if drift > p.maxDriftC {
-		return fmt.Errorf("sensor %s drift %.1f C: %w", sample.SensorID, drift, RecoverableMediaFault)
-	}
-	if sample.Quality < 0.05 {
-		return fmt.Errorf("sensor %s open: %w", sample.SensorID, ErrMediaOpen)
+	if profile.ClogIndex >= p.maxClog {
+		return fmt.Errorf("%w: index %.3f >= %.3f", ErrClogged, profile.ClogIndex, p.maxClog)
 	}
 	return nil
 }
 
-// IsRecoverable reports whether err is a recoverable media fault.
-func IsRecoverable(err error) bool {
-	return errors.Is(err, RecoverableMediaFault)
+func (p *Probe) NeedsBackwash(profile model.MediaProfile) bool { return profile.ClogIndex >= p.maxClog*0.7 }
+
+func (p *Probe) Touch(profile *model.MediaProfile, at time.Time) {
+	profile.ClogIndex *= 0.35
+	if profile.ClogIndex < 0.05 { profile.ClogIndex = 0.05 }
+	profile.UpdatedAt = at
 }
 
-// Classify maps media errors to operator codes.
-func Classify(err error) string {
-	switch {
-	case err == nil:
-		return "ok"
-	case errors.Is(err, RecoverableMediaFault):
-		return "recoverable"
-	case errors.Is(err, ErrMediaOpen):
-		return "open"
-	case errors.Is(err, ErrMediaShort):
-		return "short"
-	default:
-		return "unknown"
-	}
-}
-
-// Wrap preserves RecoverableMediaFault across package boundaries.
-func Wrap(err error, msg string) error {
-	if err == nil {
-		return nil
-	}
-	return fmt.Errorf("%s: %w", msg, err)
-}
+func IsClogged(err error) bool { return errors.Is(err, ErrClogged) }
+func IsVoidBad(err error) bool { return errors.Is(err, ErrVoidRatio) }

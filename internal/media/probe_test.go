@@ -1,28 +1,26 @@
-package media
+package media_test
 
 import (
-	"errors"
 	"testing"
 	"time"
 
+	"github.com/lacsar712/aerofilt/internal/media"
 	"github.com/lacsar712/aerofilt/internal/model"
 )
 
-func TestRecoverableMediaFaultChain(t *testing.T) {
-	p := NewProbe(0.8, 10)
-	sample := model.TempSample{
-		ZoneID: "crown", SensorID: "t1", Celsius: 1180, Quality: 0.6,
-		At: time.Now().UTC(), Source: "test",
+func TestProbeClogged(t *testing.T) {
+	p := media.NewProbe(0.8, 0.35, 0.55, 1.0)
+	err := p.Evaluate(model.MediaProfile{FilterID: "f1", BedDepthM: 1.5, VoidRatio: 0.4, ClogIndex: 0.9})
+	if !media.IsClogged(err) {
+		t.Fatalf("expected clogged: %v", err)
 	}
-	err := p.ValidateSample(sample, 1180)
-	if err == nil {
-		t.Fatal("expected recoverable fault")
-	}
-	if !errors.Is(err, RecoverableMediaFault) {
-		t.Fatalf("errors.Is failed: %v classify=%s", err, Classify(err))
-	}
-	wrapped := Wrap(err, "probe check")
-	if !errors.Is(wrapped, RecoverableMediaFault) {
-		t.Fatal("wrap broke RecoverableMediaFault chain")
+}
+
+func TestProbeTouch(t *testing.T) {
+	p := media.NewProbe(0.8, 0.35, 0.55, 1.0)
+	prof := model.MediaProfile{ClogIndex: 0.8}
+	p.Touch(&prof, time.Now().UTC())
+	if prof.ClogIndex >= 0.8 {
+		t.Fatal("clog index should decrease")
 	}
 }
